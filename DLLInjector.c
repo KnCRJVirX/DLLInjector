@@ -368,6 +368,11 @@ int main(int argc, char const *argv[])
     HMODULE (*pLoadLibraryW)(LPCWSTR) = (HMODULE(*)(LPCWSTR))GetRemoteProcAddress(hRemoteKernel32, TEXT("Kernel32.dll"), "LoadLibraryW");
     printf("[%s]:[Kernel32]:[LoadLibraryW] address: %p\n", processName, pLoadLibraryW);
 
+    // HMODULE hKernel32 = GetModuleHandleW(TEXT("Kernel32.dll"));
+    // LPVOID pLLW = GetProcAddress(hKernel32, "LoadLibraryW");
+    // printf("[%d]:[Kernel32] address: %p\n", GetCurrentProcessId(), hKernel32);
+    // printf("[%d]:[Kernel32]:[LoadLibraryW] address: %p\n", GetCurrentProcessId(), pLLW);
+
     BOOL retval = 0; 
     switch (iMethod)
     {
