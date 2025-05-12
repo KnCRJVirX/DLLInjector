@@ -7,129 +7,7 @@
 #include <windows.h>
 #include <tlhelp32.h>
 
-#define M_BUF_SIZ 65536
-char gbk_buffer[M_BUF_SIZ];
-char utf8_buffer[M_BUF_SIZ];
-wchar_t utf16_buffer[M_BUF_SIZ];
-wchar_t* utf8toutf16(const char* utf8text, wchar_t* utf16text, size_t utf16text_size)
-{
-    MultiByteToWideChar(CP_UTF8, 0, utf8text, -1, utf16text, utf16text_size);
-    return utf16text;
-}
-char* utf16toutf8(const wchar_t* utf16text, char* utf8text, size_t utf8text_size)
-{
-    WideCharToMultiByte(CP_UTF8, 0, utf16text, -1, utf8text, utf8text_size, NULL, NULL);
-    return utf8text;
-}
-char* utf8togbk(const char* utf8text, char* gbktext, size_t gbktext_size)
-{
-    wchar_t* utf16text = (wchar_t*)calloc((strlen(utf8text) + 1) * 2, sizeof(char));
-    MultiByteToWideChar(CP_UTF8, 0, utf8text, -1, utf16text, (strlen(utf8text) + 1) * 2);
-    WideCharToMultiByte(936, 0, utf16text, -1, gbktext, gbktext_size, NULL, NULL);
-    free(utf16text);
-    return gbktext;
-}
-
-// 使用进程名获取PID
-DWORD GetProcessIdByName(const LPTSTR processName)
-{
-    // 对所有进程快照
-    HANDLE hAllProcess = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (hAllProcess == INVALID_HANDLE_VALUE)
-    {
-        return 0;
-    }
-
-    TCHAR processNameUpr[MAX_PATH] = {0};
-    TCHAR tmpProcessName[MAX_PATH] = {0};
-    wcscpy(processNameUpr, processName);
-    wcsupr(processNameUpr);
-    
-    // 遍历快照，找到进程名匹配的
-    DWORD resultPID = 0;
-    PROCESSENTRY32 pe = {0};
-    pe.dwSize = sizeof(pe);
-    if (!Process32First(hAllProcess, &pe))
-    {
-        return 0;
-    }
-    do
-    {
-        wcscpy(tmpProcessName, pe.szExeFile);
-        wcsupr(tmpProcessName);
-        if (!wcscmp(tmpProcessName, processNameUpr))
-        {
-            resultPID = pe.th32ProcessID;
-            break;
-        }
-    } while (Process32Next(hAllProcess, &pe));
-    
-    CloseHandle(hAllProcess);
-    return resultPID;
-}
-
-// 获取远程模块句柄
-HMODULE GetRemoteModuleHandle(DWORD processId, const LPTSTR moduleName)
-{
-    // 对进程中所有模块快照
-    HANDLE hAllModule = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, processId);
-    if (hAllModule == INVALID_HANDLE_VALUE)
-    {
-        return NULL;
-    }
-
-    TCHAR moduleNameUpr[MAX_PATH] = {0};
-    TCHAR tmpModuleName[MAX_PATH] = {0};
-    wcscpy(moduleNameUpr, moduleName);
-    wcsupr(moduleNameUpr);
-    
-    // 遍历快照，找到模块名匹配的
-    HMODULE resulthModule = INVALID_HANDLE_VALUE;
-    MODULEENTRY32 me = {0};
-    me.dwSize = sizeof(me);
-    if (!Module32First(hAllModule, &me))
-    {
-        CloseHandle(hAllModule);
-        return NULL;
-    }
-    do
-    {
-        printf("From Process:%d Found module: %s\n", processId, utf16toutf8(me.szModule, utf8_buffer, M_BUF_SIZ));
-        wcscpy(tmpModuleName, me.szModule);
-        wcsupr(tmpModuleName);
-        if (!wcscmp(tmpModuleName, moduleNameUpr))
-        {
-            resulthModule = me.hModule;
-            break;
-        }
-    } while (Module32Next(hAllModule, &me));
-    CloseHandle(hAllModule);
-    
-    return resulthModule;
-}
-
-// 获取远程模块函数地址
-DWORD_PTR GetRemoteProcAddress(HMODULE hRemoteModuleHandle, LPCWSTR moduleName, LPCSTR procName)
-{
-    // 加载模块，获取函数地址
-    HMODULE hModule = LoadLibraryW(moduleName);
-    if (hModule == NULL)
-    {
-        return (DWORD_PTR)NULL;
-    }
-    FARPROC procAddr = GetProcAddress(hModule, procName);
-    FreeLibrary(hModule);
-    if (procAddr == NULL)
-    {
-        return (DWORD_PTR)NULL;
-    }
-    
-    // 计算偏移量
-    DWORD_PTR offset = (DWORD_PTR)procAddr - (DWORD_PTR)hModule;
-
-    // 将偏移量加在基址（模块句柄）上返回
-    return (DWORD_PTR)hRemoteModuleHandle + (DWORD_PTR)offset;
-}
+#include "Utils.h"
 
 BOOL InjectModuleToProcessByRemoteThread(DWORD processID, PVOID pLoadLibraryW, LPCWSTR moduleName)
 {
@@ -289,6 +167,159 @@ BOOL InjectModuleToProcessByQueueUserAPC(DWORD processID, PVOID pLoadLibraryW, L
     return FALSE;
 }
 
+DWORD HideModuleByCutLink(DWORD processId, LPCWSTR moduleName, PPEB pebBaseAddress)
+{
+    // 打开进程
+    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processId);
+
+    // 读取PEB
+    PEB remotePeb = {0};
+    if (ReadProcessMemory(hProcess, pebBaseAddress, &remotePeb, sizeof(remotePeb), NULL) == FALSE) goto err;
+
+    // 准备全大写的模块路径，以忽略大小写
+    WCHAR moduleNameUpr[2048] = {0};
+    WCHAR tmpDllPath[2048] = {0};
+    WCHAR tmpDllPathUpr[2048] = {0};
+    wcscpy(moduleNameUpr, moduleName);
+    wcsupr(moduleNameUpr);
+
+    // 获取InLoadOrderModuleList表头
+    PEB_LDR_DATA_FULL remoteLdrData = {0};
+    ReadProcessMemory(hProcess, remotePeb.Ldr, &remoteLdrData, sizeof(remoteLdrData), NULL);
+    LIST_ENTRY* pHeadLink = remoteLdrData.InLoadOrderModuleList.Flink;
+    LIST_ENTRY* curPtr = pHeadLink;
+
+    // 遍历InLoadOrderLinks链表，切除目标结点
+    DWORD cutCount = 0;
+    printf("Processing: InLoadOrderLinks\n");
+    while (1)
+    {
+        // 计算LDR_DATA_TABLE_ENTRY指针的位置（利用CONTAINING_RECORD）
+        PLDR_DATA_TABLE_ENTRY_FULL pTable = CONTAINING_RECORD(curPtr, LDR_DATA_TABLE_ENTRY_FULL, InLoadOrderLinks);
+        LDR_DATA_TABLE_ENTRY_FULL remoteTable = {0};
+        ReadProcessMemory(hProcess, pTable, &remoteTable, sizeof(remoteTable), NULL);
+        
+        // 读取并转为全大写
+        ReadProcessMemory(hProcess, remoteTable.FullDllName.Buffer, tmpDllPath, sizeof(tmpDllPath), NULL);
+        wcscpy(tmpDllPathUpr, tmpDllPath);
+        wcsupr(tmpDllPathUpr);
+
+        // printf("Dll: %s\n", utf16toutf8(tmpDllPath, utf8_buffer, M_BUF_SIZ));
+
+        // 匹配则切除
+        DWORD retval;
+        if (wcsstr(tmpDllPathUpr, moduleNameUpr))
+        {
+            printf("Found dll: %s\n", utf16toutf8(tmpDllPath, utf8_buffer, M_BUF_SIZ));
+            printf("LDR_DATA_TABLE_ENTRY address: %p\n", pTable);
+            printf("Back link: %p, Forward link: %p\n", remoteTable.InLoadOrderLinks.Blink, remoteTable.InLoadOrderLinks.Flink);
+
+            retval = WriteProcessMemory(hProcess, remoteTable.InLoadOrderLinks.Blink, &(remoteTable.InLoadOrderLinks.Flink), sizeof(PVOID), NULL);
+            retval = WriteProcessMemory(hProcess, remoteTable.InLoadOrderLinks.Flink + sizeof(PVOID), &(remoteTable.InLoadOrderLinks.Blink), sizeof(PVOID), NULL);
+
+            retval = GetLastError();
+            printf("Cut it!\n");
+            ++cutCount;
+            break;
+        }
+
+        // 结束则退出
+        if (remoteTable.InLoadOrderLinks.Flink == pHeadLink) break;
+
+        curPtr = remoteTable.InLoadOrderLinks.Flink;
+    }
+
+    // 获取InMemoryOrderModuleList表头
+    pHeadLink = remoteLdrData.InMemoryOrderModuleList.Flink;
+    curPtr = pHeadLink;
+    // 遍历InMemoryOrderModuleList链表，切除目标结点
+    printf("Processing: InMemoryOrderModuleList\n");
+    while (1)
+    {
+        // 计算LDR_DATA_TABLE_ENTRY指针的位置（利用CONTAINING_RECORD）
+        PLDR_DATA_TABLE_ENTRY_FULL pTable = CONTAINING_RECORD(curPtr, LDR_DATA_TABLE_ENTRY_FULL, InMemoryOrderLinks);
+        LDR_DATA_TABLE_ENTRY_FULL remoteTable = {0};
+        ReadProcessMemory(hProcess, pTable, &remoteTable, sizeof(remoteTable), NULL);
+        
+        // 读取并转为全大写
+        ReadProcessMemory(hProcess, remoteTable.FullDllName.Buffer, tmpDllPath, sizeof(tmpDllPath), NULL);
+        wcscpy(tmpDllPathUpr, tmpDllPath);
+        wcsupr(tmpDllPathUpr);
+
+        // printf("Dll: %s\n", utf16toutf8(tmpDllPath, utf8_buffer, M_BUF_SIZ));
+
+        // 匹配则切除
+        DWORD retval;
+        if (wcsstr(tmpDllPathUpr, moduleNameUpr))
+        {
+            printf("Found dll: %s\n", utf16toutf8(tmpDllPath, utf8_buffer, M_BUF_SIZ));
+            printf("LDR_DATA_TABLE_ENTRY address: %p\n", pTable);
+            printf("Back link: %p, Forward link: %p\n", remoteTable.InMemoryOrderLinks.Blink, remoteTable.InMemoryOrderLinks.Flink);
+
+            retval = WriteProcessMemory(hProcess, remoteTable.InMemoryOrderLinks.Blink, &(remoteTable.InMemoryOrderLinks.Flink), sizeof(PVOID), NULL);
+            retval = WriteProcessMemory(hProcess, remoteTable.InMemoryOrderLinks.Flink + sizeof(PVOID), &(remoteTable.InMemoryOrderLinks.Blink), sizeof(PVOID), NULL);
+
+            retval = GetLastError();
+            printf("Cut it!\n");
+            ++cutCount;
+            break;
+        }
+
+        // 结束则退出
+        if (remoteTable.InMemoryOrderLinks.Flink == pHeadLink) break;
+
+        curPtr = remoteTable.InMemoryOrderLinks.Flink;
+    }
+
+    // 获取InInitializationOrderModuleList表头
+    pHeadLink = remoteLdrData.InInitializationOrderModuleList.Flink;
+    curPtr = pHeadLink;
+    // 遍历InInitializationOrderModuleList链表，切除目标结点
+    printf("Processing: InInitializationOrderModuleList\n");
+    while (1)
+    {
+        // 计算LDR_DATA_TABLE_ENTRY指针的位置（利用CONTAINING_RECORD）
+        PLDR_DATA_TABLE_ENTRY_FULL pTable = CONTAINING_RECORD(curPtr, LDR_DATA_TABLE_ENTRY_FULL, InInitializationOrderLinks);
+        LDR_DATA_TABLE_ENTRY_FULL remoteTable = {0};
+        ReadProcessMemory(hProcess, pTable, &remoteTable, sizeof(remoteTable), NULL);
+        
+        // 读取并转为全大写
+        ReadProcessMemory(hProcess, remoteTable.FullDllName.Buffer, tmpDllPath, sizeof(tmpDllPath), NULL);
+        wcscpy(tmpDllPathUpr, tmpDllPath);
+        wcsupr(tmpDllPathUpr);
+
+        // printf("Dll: %s\n", utf16toutf8(tmpDllPath, utf8_buffer, M_BUF_SIZ));
+
+        // 匹配则切除
+        DWORD retval;
+        if (wcsstr(tmpDllPathUpr, moduleNameUpr))
+        {
+            printf("Found dll: %s\n", utf16toutf8(tmpDllPath, utf8_buffer, M_BUF_SIZ));
+            printf("LDR_DATA_TABLE_ENTRY address: %p\n", pTable);
+            printf("Back link: %p, Forward link: %p\n", remoteTable.InInitializationOrderLinks.Blink, remoteTable.InInitializationOrderLinks.Flink);
+
+            retval = WriteProcessMemory(hProcess, remoteTable.InInitializationOrderLinks.Blink, &(remoteTable.InInitializationOrderLinks.Flink), sizeof(PVOID), NULL);
+            retval = WriteProcessMemory(hProcess, remoteTable.InInitializationOrderLinks.Flink + sizeof(PVOID), &(remoteTable.InInitializationOrderLinks.Blink), sizeof(PVOID), NULL);
+
+            retval = GetLastError();
+            printf("Cut it!\n");
+            ++cutCount;
+            break;
+        }
+
+        // 结束则退出
+        if (remoteTable.InInitializationOrderLinks.Flink == pHeadLink) break;
+
+        curPtr = remoteTable.InInitializationOrderLinks.Flink;
+    }
+    
+    CloseHandle(hProcess);
+    return cutCount;
+    err:
+    CloseHandle(hProcess);
+    return -1;
+}
+
 typedef enum InjectMethod
 {
     RemoteThread = 0,
@@ -323,7 +354,9 @@ int main(int argc, char const *argv[])
 
     char processName[MAX_PATH] = {0};
     char dllpath[MAX_PATH] = {0};
+    WCHAR dllpathW[MAX_PATH] = {0};
     DWORD pid = 0;
+    BOOL hideModule = FALSE;
     InjectMethod iMethod = RemoteThread;
 
     for (int i = 0; i < argc; i++)
@@ -340,6 +373,8 @@ int main(int argc, char const *argv[])
         { iMethod = ThreadHijack; }
         else if (!strcmp(argv[i], "-quapc"))
         { iMethod = InjectQueueUserAPC; }
+        else if (!strcmp(argv[i], "-hide"))
+        { hideModule = TRUE; }
     }
 
     if (processName[0] == '\0' && pid == 0)
@@ -366,37 +401,52 @@ int main(int argc, char const *argv[])
     printf("[%s]:[Kernel32.dll] address: %p\n", processName, hRemoteKernel32);
 
     HMODULE (*pLoadLibraryW)(LPCWSTR) = (HMODULE(*)(LPCWSTR))GetRemoteProcAddress(hRemoteKernel32, TEXT("Kernel32.dll"), "LoadLibraryW");
-    printf("[%s]:[Kernel32]:[LoadLibraryW] address: %p\n", processName, pLoadLibraryW);
+    printf("[%s]:[Kernel32.dll]:[LoadLibraryW] address: %p\n", processName, pLoadLibraryW);
 
     // HMODULE hKernel32 = GetModuleHandleW(TEXT("Kernel32.dll"));
     // LPVOID pLLW = GetProcAddress(hKernel32, "LoadLibraryW");
-    // printf("[%d]:[Kernel32] address: %p\n", GetCurrentProcessId(), hKernel32);
-    // printf("[%d]:[Kernel32]:[LoadLibraryW] address: %p\n", GetCurrentProcessId(), pLLW);
+    // printf("[%d]:[Kernel32.dll] address: %p\n", GetCurrentProcessId(), hKernel32);
+    // printf("[%d]:[Kernel32.dll]:[LoadLibraryW] address: %p\n", GetCurrentProcessId(), pLLW);
 
-    BOOL retval = 0; 
+    DWORD retval = 0;
+    utf8toutf16(dllpath, dllpathW, MAX_PATH);
     switch (iMethod)
     {
     case RemoteThread:
-        retval = InjectModuleToProcessByRemoteThread(pid, pLoadLibraryW, utf8toutf16(dllpath, utf16_buffer, M_BUF_SIZ));
+        retval = InjectModuleToProcessByRemoteThread(pid, pLoadLibraryW, dllpathW);
         break;
     case ThreadHijack:
-        retval = InjectModuleToProcessByThreadHijack(pid, pLoadLibraryW, utf8toutf16(dllpath, utf16_buffer, M_BUF_SIZ));
+        retval = InjectModuleToProcessByThreadHijack(pid, pLoadLibraryW, dllpathW);
         break;
     case InjectQueueUserAPC:
-        retval = InjectModuleToProcessByQueueUserAPC(pid, pLoadLibraryW, utf8toutf16(dllpath, utf16_buffer, M_BUF_SIZ));
+        retval = InjectModuleToProcessByQueueUserAPC(pid, pLoadLibraryW, dllpathW);
         break;
     default:
         break;
     }
     
     if (retval)
-    {
-        printf("Inject success!\n");
-    }
+    { printf("Inject success!\n"); }
     else
+    { printf("Inject fail!\n"); }
+
+    if (hideModule)
     {
-        printf("Inject fail!\n");
+        PPEB pRemotePeb = GetRemoteProcessPebAddress(pid);
+        if (!pRemotePeb)
+        {
+            printf("Get Remote PEB address fail!\n");
+            goto get_peb_fail;
+        }
+        retval = HideModuleByCutLink(pid, dllpathW, pRemotePeb);
+        if (retval > 0)
+        { printf("Hide dll: %s success!\n", dllpath); }
+        else if (retval == 0)
+        { printf("Dll: %s not found!\n", dllpath); }
+        else 
+        { printf("Hide dll fail!\n"); }
     }
-    
+    get_peb_fail:
+
     return 0;
 }

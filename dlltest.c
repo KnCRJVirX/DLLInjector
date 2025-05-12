@@ -25,16 +25,16 @@ __declspec(dllexport) _stdcall void MyTestFunction()
     }
 }
 
-VOID WINAPI tls_callback(
-    PVOID DllHandle,
-    DWORD Reason,
-    PVOID Reserved)
-{
-    debugLog("%s", reason2text(Reason));
-}
+// VOID WINAPI tls_callback(
+//     PVOID DllHandle,
+//     DWORD Reason,
+//     PVOID Reserved)
+// {
+//     debugLog("%s", reason2text(Reason));
+// }
 // 注入TLS段
-#pragma section(".CRT$XLB")
-__attribute__((section(".CRT$XLB"))) PIMAGE_TLS_CALLBACK p_tls_callback = tls_callback;
+// #pragma section(".CRT$XLB")
+// __attribute__((section(".CRT$XLB"))) PIMAGE_TLS_CALLBACK p_tls_callback = tls_callback;
 
 VOID WorkFunc(LPVOID fdwReason)
 {
