@@ -4,14 +4,14 @@
 简易DLL注入器，个人学习DLL注入原理用
 
 ## 编译（mingw-w64）
-编译注入器：
-```
-gcc DLLInjector.c -lntdll -lkernel32 -luser32 -o DLLInjector.exe
-```
-编译DLL：
-```
-gcc -mwindows --shared -fPIE dlltest.c -o dlltest.dll
-```
+- 编译注入器
+  ```
+  gcc DLLInjector.c -lntdll -lkernel32 -luser32 -o DLLInjector.exe
+  ```
+- 编译DLL
+  ```
+  gcc -mwindows --shared -fPIE dlltest.c -o dlltest.dll
+  ```
 
 ## 使用
 
