@@ -1,3 +1,5 @@
 *.exe
 *.dll
+test*
 .vscode/
+donut_v1.1/

@@ -13,15 +13,19 @@
   gcc -mwindows --shared -fPIE dlltest.c -o dlltest.dll
   ```
 
-## 使用
-
-用法：
+## 用法
+### DLLInjector
 ```
 DLLInjector.exe -im <ProcessName> -dll <DllFileFullPath>
 ```
 或
 ```
 DLLInjector.exe -pid <ProcessID> -dll <DllFileFullPath>
+```
+
+### CheckHide
+```
+CheckHide.exe <ProcessName> <DllName>
 ```
 
 ## 可选选项
@@ -38,8 +42,6 @@ DLLInjector.exe -pid <ProcessID> -dll <DllFileFullPath>
 ## 文件夹中的其他文件
 
 ```winternals.h``` Windows内部常见结构体的完整定义，来自于**Duncan Ogilvie**的**Windows Internals Crash Course**的视频简介
-
-```CheckHide.c``` 简单地检查是否能找到某个模块（通过```CreateToolhelp32Snapshot```）
 
 ```dlltest.c``` ```dlltest.h``` ```dlltest.dll``` 注入后弹窗
 

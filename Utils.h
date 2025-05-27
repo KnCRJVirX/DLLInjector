@@ -69,7 +69,17 @@ static inline char* utf8togbk(const char* utf8text, char* gbktext, size_t gbktex
     free(utf16text);
     return gbktext;
 }
+static inline char* gbktoutf8(const char* gbktext, char* utf8text, size_t utf8text_size)
+{
+    wchar_t* utf16text = (wchar_t*)calloc((strlen(gbktext) + 1) * 2, sizeof(char));
+    MultiByteToWideChar(936, 0, gbktext, -1, utf16text, (strlen(gbktext) + 1) * 2);
+    WideCharToMultiByte(CP_UTF8, 0, utf16text, -1, utf8text, utf8text_size, NULL, NULL);
+    free(utf16text);
+    return utf8text;
+}
 
+// 更改CodePage为UTF8
+#define UNICODE_INIT() do { SetConsoleCP(CP_UTF8); SetConsoleOutputCP(CP_UTF8); } while(0)
 // 使用进程名获取PID
 static inline DWORD GetProcessIdByName(const LPTSTR processName);
 // 获取远程模块句柄
@@ -208,7 +218,7 @@ static inline PPEB GetRemoteProcessPebAddress(DWORD processId)
 static inline BOOL EnumModules(DWORD processId, BOOL (*EnumModulesFunc)(LPMODULEENTRY32W, LPVOID), LPVOID arg)
 {
     HANDLE hAllModules = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, processId);
-    if (hAllModules == NULL) return FALSE;
+    if (hAllModules == INVALID_HANDLE_VALUE) return FALSE;
     MODULEENTRY32W me = {0};
     me.dwSize = sizeof(me);
     Module32FirstW(hAllModules, &me);
