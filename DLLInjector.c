@@ -167,6 +167,40 @@ BOOL InjectModuleToProcessByQueueUserAPC(DWORD processID, PVOID pLoadLibraryW, L
     return FALSE;
 }
 
+BOOL InjectModuleToProcessBySelfLoad(DWORD processID, PVOID pLoadLibraryW, LPCWSTR moduleName)
+{
+    char* loaderFileBuffer = NULL;
+
+    HANDLE hFile = CreateFileW(moduleName, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+    if (hFile == INVALID_HANDLE_VALUE) goto err;
+
+    DWORD loaderFileSize = GetFileSize(hFile, NULL);
+    loaderFileBuffer = (char*)malloc(loaderFileSize + 10);
+    DWORD readSize = 0;
+    ReadFile(hFile, loaderFileBuffer, loaderFileSize, &readSize, NULL);
+    if (!readSize) goto err;
+
+    HANDLE hProcess = OpenProcess(PROCESS_ALL_ACCESS, FALSE, processID);
+    if (hProcess == NULL) goto err;
+    LPVOID remoteMem = VirtualAllocEx(hProcess, NULL, loaderFileSize + 10, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    if (!remoteMem) goto err;
+    WriteProcessMemory(hProcess, remoteMem, loaderFileBuffer, readSize, NULL);
+    HANDLE hRemoteThread = CreateRemoteThread(hProcess, NULL, 0, (LPTHREAD_START_ROUTINE)remoteMem, NULL, 0, NULL);
+
+    WaitForSingleObject(hRemoteThread, INFINITE);
+
+    CloseHandle(hFile);
+    if (loaderFileBuffer) free(loaderFileBuffer);
+    CloseHandle(hProcess);
+    return TRUE;
+
+    err:
+    CloseHandle(hFile);
+    if (loaderFileBuffer) free(loaderFileBuffer);
+    CloseHandle(hProcess);
+    return FALSE;
+}
+
 DWORD HideModuleByCutLink(DWORD processId, LPCWSTR moduleName, PPEB pebBaseAddress)
 {
     // 打开进程
@@ -189,9 +223,9 @@ DWORD HideModuleByCutLink(DWORD processId, LPCWSTR moduleName, PPEB pebBaseAddre
     LIST_ENTRY* pHeadLink = remoteLdrData.InLoadOrderModuleList.Flink;
     LIST_ENTRY* curPtr = pHeadLink;
 
-    // 遍历InLoadOrderLinks链表，切除目标结点
+    // 遍历InLoadOrderModuleList链表，切除目标结点
     DWORD cutCount = 0;
-    printf("Processing: InLoadOrderLinks\n");
+    printf("Processing: InLoadOrderModuleList\n");
     while (1)
     {
         // 计算LDR_DATA_TABLE_ENTRY指针的位置（利用CONTAINING_RECORD）
@@ -214,103 +248,36 @@ DWORD HideModuleByCutLink(DWORD processId, LPCWSTR moduleName, PPEB pebBaseAddre
             printf("LDR_DATA_TABLE_ENTRY address: %p\n", pTable);
             printf("Back link: %p, Forward link: %p\n", remoteTable.InLoadOrderLinks.Blink, remoteTable.InLoadOrderLinks.Flink);
 
+            // 切InLoadOrderLinks链
+            printf("Cutting InLoadOrderLinks ... ");
             retval = WriteProcessMemory(hProcess, remoteTable.InLoadOrderLinks.Blink, &(remoteTable.InLoadOrderLinks.Flink), sizeof(PVOID), NULL);
             retval = WriteProcessMemory(hProcess, remoteTable.InLoadOrderLinks.Flink + sizeof(PVOID), &(remoteTable.InLoadOrderLinks.Blink), sizeof(PVOID), NULL);
+            if (retval) printf("Success.\n");
+            else printf("Fail.\n");
+
+            // 切InMemoryOrderLinks链
+            printf("Cutting InMemoryOrderLinks ... ");
+            retval = WriteProcessMemory(hProcess, remoteTable.InMemoryOrderLinks.Blink, &(remoteTable.InMemoryOrderLinks.Flink), sizeof(PVOID), NULL);
+            retval = WriteProcessMemory(hProcess, remoteTable.InMemoryOrderLinks.Flink + sizeof(PVOID), &(remoteTable.InMemoryOrderLinks.Blink), sizeof(PVOID), NULL);
+            if (retval) printf("Success.\n");
+            else printf("Fail.\n");
+
+            // 切InInitializationOrderLinks链
+            printf("Cutting InInitializationOrderLinks ... ");
+            retval = WriteProcessMemory(hProcess, remoteTable.InInitializationOrderLinks.Blink, &(remoteTable.InInitializationOrderLinks.Flink), sizeof(PVOID), NULL);
+            retval = WriteProcessMemory(hProcess, remoteTable.InInitializationOrderLinks.Flink + sizeof(PVOID), &(remoteTable.InInitializationOrderLinks.Blink), sizeof(PVOID), NULL);
+            if (retval) printf("Success.\n");
+            else printf("Fail.\n");
 
             retval = GetLastError();
-            printf("Cut it!\n");
             ++cutCount;
             break;
         }
 
         // 结束则退出
         if (remoteTable.InLoadOrderLinks.Flink == pHeadLink) break;
-
+        // 下一个
         curPtr = remoteTable.InLoadOrderLinks.Flink;
-    }
-
-    // 获取InMemoryOrderModuleList表头
-    pHeadLink = remoteLdrData.InMemoryOrderModuleList.Flink;
-    curPtr = pHeadLink;
-    // 遍历InMemoryOrderModuleList链表，切除目标结点
-    printf("Processing: InMemoryOrderModuleList\n");
-    while (1)
-    {
-        // 计算LDR_DATA_TABLE_ENTRY指针的位置（利用CONTAINING_RECORD）
-        PLDR_DATA_TABLE_ENTRY_FULL pTable = CONTAINING_RECORD(curPtr, LDR_DATA_TABLE_ENTRY_FULL, InMemoryOrderLinks);
-        LDR_DATA_TABLE_ENTRY_FULL remoteTable = {0};
-        ReadProcessMemory(hProcess, pTable, &remoteTable, sizeof(remoteTable), NULL);
-        
-        // 读取并转为全大写
-        ReadProcessMemory(hProcess, remoteTable.FullDllName.Buffer, tmpDllPath, sizeof(tmpDllPath), NULL);
-        wcscpy(tmpDllPathUpr, tmpDllPath);
-        wcsupr(tmpDllPathUpr);
-
-        // printf("Dll: %s\n", utf16toutf8(tmpDllPath, utf8_buffer, M_BUF_SIZ));
-
-        // 匹配则切除
-        DWORD retval;
-        if (wcsstr(tmpDllPathUpr, moduleNameUpr))
-        {
-            printf("Found dll: %s\n", utf16toutf8(tmpDllPath, utf8_buffer, M_BUF_SIZ));
-            printf("LDR_DATA_TABLE_ENTRY address: %p\n", pTable);
-            printf("Back link: %p, Forward link: %p\n", remoteTable.InMemoryOrderLinks.Blink, remoteTable.InMemoryOrderLinks.Flink);
-
-            retval = WriteProcessMemory(hProcess, remoteTable.InMemoryOrderLinks.Blink, &(remoteTable.InMemoryOrderLinks.Flink), sizeof(PVOID), NULL);
-            retval = WriteProcessMemory(hProcess, remoteTable.InMemoryOrderLinks.Flink + sizeof(PVOID), &(remoteTable.InMemoryOrderLinks.Blink), sizeof(PVOID), NULL);
-
-            retval = GetLastError();
-            printf("Cut it!\n");
-            ++cutCount;
-            break;
-        }
-
-        // 结束则退出
-        if (remoteTable.InMemoryOrderLinks.Flink == pHeadLink) break;
-
-        curPtr = remoteTable.InMemoryOrderLinks.Flink;
-    }
-
-    // 获取InInitializationOrderModuleList表头
-    pHeadLink = remoteLdrData.InInitializationOrderModuleList.Flink;
-    curPtr = pHeadLink;
-    // 遍历InInitializationOrderModuleList链表，切除目标结点
-    printf("Processing: InInitializationOrderModuleList\n");
-    while (1)
-    {
-        // 计算LDR_DATA_TABLE_ENTRY指针的位置（利用CONTAINING_RECORD）
-        PLDR_DATA_TABLE_ENTRY_FULL pTable = CONTAINING_RECORD(curPtr, LDR_DATA_TABLE_ENTRY_FULL, InInitializationOrderLinks);
-        LDR_DATA_TABLE_ENTRY_FULL remoteTable = {0};
-        ReadProcessMemory(hProcess, pTable, &remoteTable, sizeof(remoteTable), NULL);
-        
-        // 读取并转为全大写
-        ReadProcessMemory(hProcess, remoteTable.FullDllName.Buffer, tmpDllPath, sizeof(tmpDllPath), NULL);
-        wcscpy(tmpDllPathUpr, tmpDllPath);
-        wcsupr(tmpDllPathUpr);
-
-        // printf("Dll: %s\n", utf16toutf8(tmpDllPath, utf8_buffer, M_BUF_SIZ));
-
-        // 匹配则切除
-        DWORD retval;
-        if (wcsstr(tmpDllPathUpr, moduleNameUpr))
-        {
-            printf("Found dll: %s\n", utf16toutf8(tmpDllPath, utf8_buffer, M_BUF_SIZ));
-            printf("LDR_DATA_TABLE_ENTRY address: %p\n", pTable);
-            printf("Back link: %p, Forward link: %p\n", remoteTable.InInitializationOrderLinks.Blink, remoteTable.InInitializationOrderLinks.Flink);
-
-            retval = WriteProcessMemory(hProcess, remoteTable.InInitializationOrderLinks.Blink, &(remoteTable.InInitializationOrderLinks.Flink), sizeof(PVOID), NULL);
-            retval = WriteProcessMemory(hProcess, remoteTable.InInitializationOrderLinks.Flink + sizeof(PVOID), &(remoteTable.InInitializationOrderLinks.Blink), sizeof(PVOID), NULL);
-
-            retval = GetLastError();
-            printf("Cut it!\n");
-            ++cutCount;
-            break;
-        }
-
-        // 结束则退出
-        if (remoteTable.InInitializationOrderLinks.Flink == pHeadLink) break;
-
-        curPtr = remoteTable.InInitializationOrderLinks.Flink;
     }
     
     CloseHandle(hProcess);
@@ -324,7 +291,8 @@ typedef enum InjectMethod
 {
     RemoteThread = 0,
     ThreadHijack = 1,
-    InjectQueueUserAPC = 2
+    InjectQueueUserAPC = 2,
+    SelfLoad = 3
 }InjectMethod;
 
 static inline const char* InjectMethod2String(InjectMethod iMethod)
@@ -340,6 +308,9 @@ static inline const char* InjectMethod2String(InjectMethod iMethod)
     case InjectQueueUserAPC:
         return "InjectQueueUserAPC";
         break;
+    case SelfLoad:
+        return "SelfLoad";
+        break;
     default:
         return "UnknownMethod";
         break;
@@ -349,8 +320,7 @@ static inline const char* InjectMethod2String(InjectMethod iMethod)
 
 int main(int argc, char const *argv[])
 {
-    SetConsoleCP(CP_UTF8);
-    SetConsoleOutputCP(CP_UTF8);
+    UNICODE_INIT();
 
     char processName[MAX_PATH] = {0};
     char dllpath[MAX_PATH] = {0};
@@ -362,17 +332,19 @@ int main(int argc, char const *argv[])
     for (int i = 0; i < argc; i++)
     {
         if (!strcmp(argv[i], "-im"))
-        { strcpy(processName, argv[++i]); }
+        { gbktoutf8(argv[++i], processName, MAX_PATH); }
         else if (!strcmp(argv[i], "-pid"))
         { sscanf(argv[++i], "%d", &pid); }
         else if (!strcmp(argv[i], "-dll"))
-        { strcpy(dllpath, argv[++i]); }
+        { gbktoutf8(argv[++i], dllpath, MAX_PATH); }
         else if (!strcmp(argv[i], "-rt"))
         { iMethod = RemoteThread; }
         else if (!strcmp(argv[i], "-th"))
         { iMethod = ThreadHijack; }
         else if (!strcmp(argv[i], "-quapc"))
         { iMethod = InjectQueueUserAPC; }
+        else if (!strcmp(argv[i], "-sl"))
+        { iMethod = SelfLoad; }
         else if (!strcmp(argv[i], "-hide"))
         { hideModule = TRUE; }
     }
@@ -421,6 +393,8 @@ int main(int argc, char const *argv[])
     case InjectQueueUserAPC:
         retval = InjectModuleToProcessByQueueUserAPC(pid, pLoadLibraryW, dllpathW);
         break;
+    case SelfLoad:
+        retval = InjectModuleToProcessBySelfLoad(pid, pLoadLibraryW, dllpathW);
     default:
         break;
     }

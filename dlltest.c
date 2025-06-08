@@ -51,7 +51,9 @@ BOOL WINAPI DllMain(
     debugLog("%s", reason2text(fdwReason));
     if (fdwReason == DLL_PROCESS_ATTACH || fdwReason == DLL_PROCESS_DETACH)
     {
+        DisableThreadLibraryCalls(hinstDLL);
         CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)WorkFunc, (LPVOID)fdwReason, 0, NULL);
+        Sleep(2000);
     }
     return TRUE;
 }
