@@ -1,8 +1,12 @@
 #ifndef GET_INFO_UTILS
 #define GET_INFO_UTILS
 
+#ifndef UNICODE
 #define UNICODE
+#endif
+#ifndef _UNICODE
 #define _UNICODE
+#endif
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -51,28 +55,30 @@ typedef struct _LDR_DATA_TABLE_ENTRY_FULL {
 static char gbk_buffer[M_BUF_SIZ];
 static char utf8_buffer[M_BUF_SIZ];
 static wchar_t utf16_buffer[M_BUF_SIZ];
-static inline wchar_t* utf8toutf16(const char* utf8text, wchar_t* utf16text, size_t utf16text_size)
+static inline wchar_t* utf8toutf16(const char* utf8text, wchar_t* utf16text, int utf16text_size)
 {
     MultiByteToWideChar(CP_UTF8, 0, utf8text, -1, utf16text, utf16text_size);
     return utf16text;
 }
-static inline char* utf16toutf8(const wchar_t* utf16text, char* utf8text, size_t utf8text_size)
+static inline char* utf16toutf8(const wchar_t* utf16text, char* utf8text, int utf8text_size)
 {
     WideCharToMultiByte(CP_UTF8, 0, utf16text, -1, utf8text, utf8text_size, NULL, NULL);
     return utf8text;
 }
-static inline char* utf8togbk(const char* utf8text, char* gbktext, size_t gbktext_size)
+static inline char* utf8togbk(const char* utf8text, char* gbktext, int gbktext_size)
 {
-    wchar_t* utf16text = (wchar_t*)calloc((strlen(utf8text) + 1) * 2, sizeof(char));
-    MultiByteToWideChar(CP_UTF8, 0, utf8text, -1, utf16text, (strlen(utf8text) + 1) * 2);
+    int utf16_text_len = (strlen(utf8text) + 1) * 2;
+    wchar_t* utf16text = (wchar_t*)calloc(utf16_text_len, sizeof(wchar_t));
+    MultiByteToWideChar(CP_UTF8, 0, utf8text, -1, utf16text, utf16_text_len);
     WideCharToMultiByte(936, 0, utf16text, -1, gbktext, gbktext_size, NULL, NULL);
     free(utf16text);
     return gbktext;
 }
 static inline char* gbktoutf8(const char* gbktext, char* utf8text, size_t utf8text_size)
 {
-    wchar_t* utf16text = (wchar_t*)calloc((strlen(gbktext) + 1) * 2, sizeof(char));
-    MultiByteToWideChar(936, 0, gbktext, -1, utf16text, (strlen(gbktext) + 1) * 2);
+    int utf16_text_len = (strlen(gbktext) + 1) * 2;
+    wchar_t* utf16text = (wchar_t*)calloc(utf16_text_len, sizeof(wchar_t));
+    MultiByteToWideChar(936, 0, gbktext, -1, utf16text, utf16_text_len);
     WideCharToMultiByte(CP_UTF8, 0, utf16text, -1, utf8text, utf8text_size, NULL, NULL);
     free(utf16text);
     return utf8text;
@@ -81,9 +87,9 @@ static inline char* gbktoutf8(const char* gbktext, char* utf8text, size_t utf8te
 // 更改CodePage为UTF8
 #define UNICODE_INIT() do { SetConsoleCP(CP_UTF8); SetConsoleOutputCP(CP_UTF8); } while(0)
 // 使用进程名获取PID
-static inline DWORD GetProcessIdByName(const LPTSTR processName);
+static inline DWORD GetProcessIdByName(const LPWSTR processName);
 // 获取远程模块句柄
-static inline HMODULE GetRemoteModuleHandle(DWORD processId, const LPTSTR moduleName);
+static inline HMODULE GetRemoteModuleHandle(DWORD processId, const LPWSTR moduleName);
 // 获取远程模块函数地址
 static inline DWORD_PTR GetRemoteProcAddress(HMODULE hRemoteModuleHandle, LPCWSTR moduleName, LPCSTR procName);
 // 获取远程进程PEB地址
@@ -92,7 +98,7 @@ static inline PPEB GetRemoteProcessPebAddress(DWORD processId);
 static inline BOOL EnumModules(DWORD processId, BOOL (*EnumModulesFunc)(LPMODULEENTRY32W, LPVOID), LPVOID arg);
 
 // 使用进程名获取PID
-static inline DWORD GetProcessIdByName(const LPTSTR processName)
+static inline DWORD GetProcessIdByName(const LPWSTR processName)
 {
     // 对所有进程快照
     HANDLE hAllProcess = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -101,8 +107,8 @@ static inline DWORD GetProcessIdByName(const LPTSTR processName)
         return 0;
     }
 
-    TCHAR processNameUpr[MAX_PATH] = {0};
-    TCHAR tmpProcessName[MAX_PATH] = {0};
+    WCHAR processNameUpr[MAX_PATH] = {0};
+    WCHAR tmpProcessName[MAX_PATH] = {0};
     wcscpy(processNameUpr, processName);
     wcsupr(processNameUpr);
     
@@ -130,7 +136,7 @@ static inline DWORD GetProcessIdByName(const LPTSTR processName)
 }
 
 // 获取远程模块句柄
-static inline HMODULE GetRemoteModuleHandle(DWORD processId, const LPTSTR moduleName)
+static inline HMODULE GetRemoteModuleHandle(DWORD processId, const LPWSTR moduleName)
 {
     // 对进程中所有模块快照
     HANDLE hAllModule = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, processId);
@@ -139,8 +145,8 @@ static inline HMODULE GetRemoteModuleHandle(DWORD processId, const LPTSTR module
         return NULL;
     }
 
-    TCHAR moduleNameUpr[MAX_PATH] = {0};
-    TCHAR tmpModuleName[MAX_PATH] = {0};
+    WCHAR moduleNameUpr[MAX_PATH] = {0};
+    WCHAR tmpModuleName[MAX_PATH] = {0};
     wcscpy(moduleNameUpr, moduleName);
     wcsupr(moduleNameUpr);
     

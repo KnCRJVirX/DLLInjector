@@ -33,8 +33,10 @@ CheckHide.exe <ProcessName> <DllName>
 ### 注入方法
 
 -  ```-rt``` RemoteThread 远程线程注入法，默认使用的方法，也是最成熟稳定的方法。
--  ```-th``` ThreadHijack 线程劫持法，暂停进程下的所有线程并修改上下文以加载模块，最不稳定的方法，容易注入即崩溃。
--  ```-quapc``` QueueUserAPC APC队列注入法，**相对温和** 且 **不依赖远程线程创建**，向目标线程的 APC队列中插入函数指针```LoadLibraryW```，当线程进入可警醒状态（调用 ```SleepEx```, ```WaitForSingleObjectEx```, ```MsgWaitForMultipleObjectsEx``` 等）时，该APC会被执行。常用于GUI程序。
+
+-  ```-apc``` QueueUserAPC APC队列注入法，**相对温和** 且 **不依赖远程线程创建**，向目标线程的 APC队列中插入函数指针```LoadLibraryW```，当线程进入可警醒状态（调用 ```SleepEx```, ```WaitForSingleObjectEx```, ```MsgWaitForMultipleObjectsEx``` 等）时，该APC会被执行。常用于GUI程序。
+
+-  ```-hijcxt``` ThreadHijack 线程劫持法，暂停进程下的所有线程并修改上下文以加载模块，需要用```-thid <ThreadId>```指定线程ID
 
 ### 隐藏
 - ```-hide``` 注入后遍历```InLoadOrderModuleList``` ```InMemoryOrderModuleList``` ```InInitializationOrderModuleList``` 三个链表，采用断链的方法隐藏注入的模块
@@ -43,8 +45,8 @@ CheckHide.exe <ProcessName> <DllName>
 
 ```winternals.h``` Windows内部常见结构体的完整定义，来自于**Duncan Ogilvie**的**Windows Internals Crash Course**的视频简介
 
-```dlltest.c``` ```dlltest.h``` ```dlltest.dll``` 注入后弹窗
+```dlltest.c``` ```dlltest.h``` 注入后弹窗
 
-```HideWindow.c``` ```HideWindow.dll``` 执行```SetWindowDisplayAffinity```函数，将目标进程的所有窗口在截屏/录屏时隐藏
+```HideWindow.c``` 执行```SetWindowDisplayAffinity```函数，将目标进程的所有窗口在截屏/录屏时隐藏
 
-```ShowWindow.c``` ```ShowWindow.dll``` 执行```SetWindowDisplayAffinity```函数，将目标进程的所有窗口在截屏/录屏时显示
+```ShowWindow.c``` 执行```SetWindowDisplayAffinity```函数，将目标进程的所有窗口在截屏/录屏时显示
